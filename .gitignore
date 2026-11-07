@@ -1,0 +1,11 @@
+.godot/
+/build/
+*.tmp
+
+# 로컬 AI 도구/에디터 연동 설정 (레포에 포함하지 않음)
+addons/revvy/
+.revvy/
+.kimi-code/
+.mcp.json
+AGENTS.md
+CLAUDE.md
