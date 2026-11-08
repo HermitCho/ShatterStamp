@@ -12,6 +12,7 @@ var _streams: Dictionary = {}
 func _ready() -> void:
 	for i in 12:
 		var p := AudioStreamPlayer.new()
+		p.bus = "SFX"
 		add_child(p)
 		_players.append(p)
 	# dur, f0, f1, noise, decay, wave(0 sine, 1 square, 2 triangle)

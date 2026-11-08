@@ -69,6 +69,13 @@ func _draw() -> void:
 	for p in _parts:
 		var k: float = p["t"] / p["max"]
 		var s: float = p["s"] * (1.0 - 0.5 * k)
-		draw_set_transform(p["p"], p["r"])
-		draw_rect(Rect2(-s / 2.0, -s / 2.0, s, s), Color(p["c"], 1.0 - k * k))
+		var col := Color(p["c"], 1.0 - k * k)
+		match GameSkin.id:
+			"neon":  # 빛 줄기: 진행 방향으로 늘어난 선
+				var v: Vector2 = p["v"] * 0.02
+				draw_line(p["p"] - v, p["p"], Color(col, col.a * 0.35), s * 0.7)
+				draw_line(p["p"] - v * 0.5, p["p"], col.lightened(0.3), s * 0.3)
+			_:
+				draw_set_transform(p["p"], p["r"])
+				draw_rect(Rect2(-s / 2.0, -s / 2.0, s, s), col)
 	draw_set_transform(Vector2.ZERO, 0.0)

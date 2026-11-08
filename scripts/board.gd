@@ -28,8 +28,10 @@ func setup(cols: int, rows: int, colors: int, seed_value: int = 0) -> void:
 	model.fill_initial()
 	blocks.resize(cols * rows)
 	_bg_box = StyleBoxFlat.new()
-	_bg_box.bg_color = Color(1, 1, 1, 0.04)
+	_bg_box.bg_color = GameSkin.c("board_bg")
 	_bg_box.set_corner_radius_all(20)
+	_bg_box.border_color = GameSkin.c("board_border")
+	_bg_box.set_border_width_all(3 if GameSkin.c("board_border").a > 0.0 else 0)
 	_overlay = BoardOverlay.new()
 	_overlay.board = self
 	_overlay.z_index = 10
@@ -76,7 +78,7 @@ func place_at(cell: Vector2i) -> bool:
 	var broken: Array = []
 	for p in targets:
 		var b: Block = blocks[_i(p)]
-		broken.append({"pos": position + cell_center(p), "color": b.color_id})
+		broken.append({"pos": position + cell_center(p) * scale, "color": b.color_id})
 		b.queue_free()
 		blocks[_i(p)] = null
 
@@ -102,7 +104,7 @@ func place_at(cell: Vector2i) -> bool:
 		"count": targets.size(),
 		"stamp_count": stamp.size(),
 		"broken": broken,
-		"anchor_pos": position + cell_center(cell),
+		"anchor_pos": position + cell_center(cell) * scale,
 	})
 	return true
 
@@ -185,4 +187,4 @@ func _draw() -> void:
 	for y in model.rows:
 		for x in model.cols:
 			var r := Rect2(Vector2(x, y) * CELL + Vector2(6, 6), Vector2(CELL - 12, CELL - 12))
-			draw_rect(r, Color(1, 1, 1, 0.025))
+			draw_rect(r, GameSkin.c("slot"))
