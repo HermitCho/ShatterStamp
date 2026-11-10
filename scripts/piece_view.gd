@@ -70,13 +70,16 @@ func _draw() -> void:
 	for c in cells:
 		mn = Vector2i(mini(mn.x, c.x), mini(mn.y, c.y))
 		mx = Vector2i(maxi(mx.x, c.x), maxi(mx.y, c.y))
-	var dim := Vector2(mx - mn + Vector2i.ONE) * cell_px
 	var area := Rect2(Vector2(0, top), size - Vector2(0, top + bottom))
+	var span := Vector2(mx - mn + Vector2i.ONE)
+	# 5칸짜리 긴 모양도 칸 밖으로 넘치지 않게 필요하면 줄인다.
+	var px := minf(cell_px, minf((area.size.x - 20.0) / span.x, (area.size.y - 8.0) / span.y))
+	var dim := span * px
 	var origin := area.position + (area.size - dim) / 2.0 + content_offset
 	var fill: Color = GameSkin.c("piece_dim") if dimmed or cooldown > 0.0 else GameSkin.c("piece")
-	var inset := maxf(2.0, cell_px * 0.08)
+	var inset := maxf(1.5, px * 0.08)
 	for c in cells:
-		var r := Rect2(origin + Vector2(c - mn) * cell_px + Vector2(inset, inset), Vector2(cell_px, cell_px) - Vector2(inset, inset) * 2.0)
+		var r := Rect2(origin + Vector2(c - mn) * px + Vector2(inset, inset), Vector2(px, px) - Vector2(inset, inset) * 2.0)
 		draw_rect(r, fill)
 	if cooldown > 0.0:
 		var w := (size.x - 40.0) * cooldown

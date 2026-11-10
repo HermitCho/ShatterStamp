@@ -16,8 +16,9 @@ func _initialize() -> void:
 	main._autoplay = false
 	root.add_child(main)
 	await process_frame
+	main.tutorial_done = true  # 튜토리얼 건너뛰기(저장은 안 함)
 	main.menus.start_pressed.emit()
-	for i in 30: await process_frame
+	await create_timer(2.2).timeout  # 3, 2, 1, GO!
 	for step in 12:
 		var mv: Dictionary = Bot.best_move(main.board.model, main.current["cells"])
 		main.stamp_lock = 0.0
@@ -26,7 +27,7 @@ func _initialize() -> void:
 		await create_timer(0.4).timeout
 	main.best = 999999  # 최고 기록 갱신 연출이 안 나오게(저장 방지)
 	main.rules.time_left = 0.0
-	await create_timer(0.9).timeout
+	await create_timer(1.6).timeout
 	var f := 0
 	for i in 300:
 		await process_frame

@@ -27,6 +27,11 @@ func _ready() -> void:
 	_streams["miss"] = _synth(0.28, 180.0, 90.0, 0.25, 9.0, 1)
 	_streams["perfect"] = _synth(0.35, 880.0, 1760.0, 0.0, 9.0, 0)
 	_streams["bonus"] = _synth(0.3, 600.0, 1200.0, 0.0, 8.0, 2)
+	_streams["count"] = _synth(0.16, 660.0, 660.0, 0.0, 14.0, 2)
+	_streams["go"] = _synth(0.45, 990.0, 1320.0, 0.0, 5.0, 1)
+	_streams["warn"] = _synth(0.09, 1250.0, 1000.0, 0.0, 30.0, 1)
+	_streams["fever_end"] = _synth(0.55, 900.0, 220.0, 0.0, 4.5, 1)
+	_streams["sparkle"] = _synth(0.25, 2400.0, 3200.0, 0.0, 14.0, 0)
 
 
 func play(sound: String, pitch := 1.0, volume_db := 0.0) -> void:

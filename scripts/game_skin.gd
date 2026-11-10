@@ -86,7 +86,8 @@ const DATA: Dictionary = {
 		"warn": Color(1.0, 0.2, 0.2),
 		"ring": Color(0.25, 0.95, 1.0, 0.95),
 		"tiers": [Color(0.92, 0.98, 1.0), Color(0.25, 0.95, 1.0), Color(1.0, 0.78, 0.2), Color(1.0, 0.25, 0.85)],
-		"grades": [Color(1.0, 0.25, 0.85), Color(0.25, 0.95, 1.0), Color(0.3, 1.0, 0.55), Color(1.0, 0.23, 0.5)],
+		# 판정 색: 금 PERFECT / 하늘 GREAT / 초록 GOOD / 빨강 MISS (미리보기와 판정 글자가 같은 색)
+		"grades": [Color(1.0, 0.84, 0.2), Color(0.25, 0.95, 1.0), Color(0.3, 1.0, 0.55), Color(1.0, 0.2, 0.2)],
 	},
 }
 

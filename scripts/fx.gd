@@ -8,6 +8,8 @@ const GRAVITY := 1800.0
 var _parts: Array = []
 var _flashes: Array = []
 var _rings: Array = []
+## 반짝이는 별(PERFECT)과 떠오르는 불꽃(FEVER) — 중력 영향이 작다.
+var _stars: Array = []
 
 
 func burst(pos: Vector2, color: Color, amount: int, power: float) -> void:
@@ -34,7 +36,36 @@ func ring(pos: Vector2, radius: float, color: Color) -> void:
 	_rings.append({"p": pos, "r": radius, "c": color, "t": 0.0, "max": 0.38})
 
 
+## PERFECT용 반짝이 별: 천천히 퍼지며 깜빡이다 사라진다.
+func stars(pos: Vector2, color: Color, amount: int, power: float) -> void:
+	for i in amount:
+		var ang := randf() * TAU
+		_stars.append({
+			"p": pos, "v": Vector2(cos(ang), sin(ang)) * randf_range(0.4, 1.0) * power,
+			"t": 0.0, "max": randf_range(0.5, 0.85), "s": randf_range(10.0, 20.0),
+			"c": color, "g": 120.0, "drag": 3.2, "tw": randf() * TAU,
+		})
+
+
+## 피버 중 화면 아래에서 올라오는 불꽃.
+func ember(pos: Vector2, color: Color) -> void:
+	_stars.append({
+		"p": pos, "v": Vector2(randf_range(-30, 30), randf_range(-420, -260)),
+		"t": 0.0, "max": randf_range(0.7, 1.2), "s": randf_range(5.0, 10.0),
+		"c": color, "g": 0.0, "drag": 0.6, "tw": randf() * TAU,
+	})
+
+
 func _process(delta: float) -> void:
+	for i in range(_stars.size() - 1, -1, -1):
+		var st: Dictionary = _stars[i]
+		st["t"] += delta
+		if st["t"] >= st["max"]:
+			_stars.remove_at(i)
+			continue
+		st["v"] *= maxf(0.0, 1.0 - st["drag"] * delta)
+		st["v"] += Vector2(0, st["g"] * delta)
+		st["p"] += st["v"] * delta
 	for i in range(_parts.size() - 1, -1, -1):
 		var p: Dictionary = _parts[i]
 		p["t"] += delta
@@ -79,3 +110,13 @@ func _draw() -> void:
 				draw_set_transform(p["p"], p["r"])
 				draw_rect(Rect2(-s / 2.0, -s / 2.0, s, s), col)
 	draw_set_transform(Vector2.ZERO, 0.0)
+	for st in _stars:
+		var k: float = st["t"] / st["max"]
+		var tw := 0.6 + 0.4 * sin(st["tw"] + st["t"] * 30.0)
+		var s: float = st["s"] * (1.0 - k * 0.6) * tw
+		var col := Color(st["c"], (1.0 - k) * tw)
+		var p: Vector2 = st["p"]
+		# 네 갈래 별: 가로·세로 가는 마름모 두 개 + 가운데 흰 점
+		draw_colored_polygon(PackedVector2Array([p + Vector2(0, -s), p + Vector2(s * 0.22, 0), p + Vector2(0, s), p + Vector2(-s * 0.22, 0)]), col)
+		draw_colored_polygon(PackedVector2Array([p + Vector2(-s, 0), p + Vector2(0, -s * 0.22), p + Vector2(s, 0), p + Vector2(0, s * 0.22)]), col)
+		draw_circle(p, s * 0.18, Color(1, 1, 1, col.a))

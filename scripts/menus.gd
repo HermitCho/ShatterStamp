@@ -3,6 +3,8 @@ extends CanvasLayer
 ## 타이틀 / 플레이 방법 / 설정 / 일시정지 / 결과 화면. 버튼을 누르면 신호만 보내고, 실제 흐름은 main.gd가 처리한다.
 
 signal start_pressed
+## 타이틀의 「튜토리얼」: 이미 봤어도 튜토리얼부터 다시 시작
+signal tutorial_pressed
 signal resume_pressed
 signal restart_pressed
 signal title_pressed
@@ -147,18 +149,21 @@ func _build_title() -> void:
 	_best_label = _label("", 30, Vector2(0, 586), W)
 	_best_label.add_theme_color_override("font_color", ACCENT)
 	p.add_child(_best_label)
-	var y := 668.0
+	var y := 664.0
+	var gap := 104.0
 	var start := _button("START", y, func(): start_pressed.emit(), true)
 	p.add_child(start)
-	var howto := _button("HOW_TO_PLAY", y + 112, func(): show_panel("howto"))
+	var howto := _button("HOW_TO_PLAY", y + gap, func(): show_panel("howto"))
 	p.add_child(howto)
-	var settings := _button("SETTINGS", y + 224, func(): _open_settings("title"))
+	var tutorial := _button("TUTORIAL_BTN", y + gap * 2, func(): tutorial_pressed.emit())
+	p.add_child(tutorial)
+	var settings := _button("SETTINGS", y + gap * 3, func(): _open_settings("title"))
 	p.add_child(settings)
-	_quit_button = _button("QUIT", y + 336, func(): get_tree().quit())
+	_quit_button = _button("QUIT", y + gap * 4, func(): get_tree().quit())
 	# 웹에서는 창을 닫을 수 없으므로 숨긴다.
 	_quit_button.visible = not OS.has_feature("web")
 	p.add_child(_quit_button)
-	_title_items = [sub, _best_label, start, howto, settings, _quit_button]
+	_title_items = [sub, _best_label, start, howto, tutorial, settings, _quit_button]
 
 
 ## 로고 등장 → 끝나면 문구와 버튼이 아래에서 살짝 올라오며 차례로 나타난다.
@@ -196,10 +201,19 @@ func _shake(power: float) -> void:
 func _build_howto() -> void:
 	var p := _panel("howto", 0.92)
 	p.add_child(_heading("HOW_TO_PLAY"))
-	var body := _label("HOWTO_BODY", 27, Vector2(0, 280), W)
-	body.size.y = 720
-	p.add_child(body)
-	p.add_child(_button("BACK", 1080, func(): show_panel("title"), true))
+	# 글 덩어리 대신 그림 카드 3장(찍으면 번짐 → 판정 색 → 콤보와 시간)
+	for i in 3:
+		var card := HowtoCard.new()
+		card.kind = i
+		card.title_key = "HOWTO_C%d_T" % (i + 1)
+		card.body_key = "HOWTO_C%d_B" % (i + 1)
+		card.position = Vector2(24, 280 + i * 250)
+		card.size = Vector2(W - 48, 232)
+		p.add_child(card)
+	var keys := _label("HOWTO_KEYS", 22, Vector2(0, 1036), W)
+	keys.modulate = Color(1, 1, 1, 0.6)
+	p.add_child(keys)
+	p.add_child(_button("BACK", 1090, func(): show_panel("title"), true))
 
 
 func _build_settings() -> void:

@@ -13,6 +13,8 @@ func _init() -> void:
 	_test_queue_bag()
 	_test_random_runs()
 	_test_rules()
+	_test_steer()
+	_test_fast_best()
 	print("\n%d checks, %d failed" % [_checks, _fails])
 	quit(1 if _fails > 0 else 0)
 
@@ -76,6 +78,14 @@ func _test_shapes_centered() -> void:
 	for i in Shapes.LIST.size():
 		var s := Shapes.get_shape(i)
 		_check(s["cells"].has(Vector2i.ZERO), "%s anchor inside shape" % s["id"])
+		# 가로·세로 홀수 칸 + 상자 정가운데가 (0,0) → 마우스 칸 = 모양 정중앙
+		var mn := Vector2i(99, 99)
+		var mx := Vector2i(-99, -99)
+		for c in s["cells"]:
+			mn = Vector2i(mini(mn.x, c.x), mini(mn.y, c.y))
+			mx = Vector2i(maxi(mx.x, c.x), maxi(mx.y, c.y))
+		_check((mx.x - mn.x) % 2 == 0 and (mx.y - mn.y) % 2 == 0, "%s odd width/height" % s["id"])
+		_check(mn + mx == Vector2i.ZERO, "%s centered on anchor" % s["id"])
 
 
 func _test_queue_bag() -> void:
@@ -113,8 +123,9 @@ func _test_rules() -> void:
 	# 판정: 최대 대비 비율
 	_check(GameRules.grade_for(10, 10) == GameRules.Grade.PERFECT, "10/10 perfect")
 	_check(GameRules.grade_for(8, 10) == GameRules.Grade.GREAT, "8/10 great")
-	_check(GameRules.grade_for(5, 10) == GameRules.Grade.GOOD, "5/10 good")
-	_check(GameRules.grade_for(4, 10) == GameRules.Grade.MISS, "4/10 miss")
+	_check(GameRules.grade_for(7, 10) == GameRules.Grade.GOOD, "7/10 good")
+	_check(GameRules.grade_for(6, 10) == GameRules.Grade.GOOD, "6/10 good")
+	_check(GameRules.grade_for(5, 10) == GameRules.Grade.MISS, "5/10 miss")
 	var r := GameRules.new()
 	r.reset()
 	# 좋은 자리 두 번 → 콤보 2, MISS → 콤보 끊김 + 시간 감소
@@ -139,3 +150,49 @@ func _test_rules() -> void:
 	_check(small["time_delta"] == 0.0, "small perfect gives no time")
 	var big := r.register_break(30, 30)
 	_check(big["time_delta"] >= 1.0, "big stamp over target gives time, pts %d target %d" % [big["points"], big["target"]])
+
+
+func _test_steer() -> void:
+	# 보충 조정을 켜면 매 차례 최대 파괴 수의 흔들림(표준편차)이 확실히 줄어야 한다.
+	var sd_off := _best_spread(false)
+	var sd_on := _best_spread(true)
+	_check(sd_on < sd_off * 0.6, "steer narrows best-count spread: %.2f -> %.2f" % [sd_off, sd_on])
+
+
+func _best_spread(steer: bool) -> float:
+	var m := BoardModel.new(8, 9, 5, 77)
+	m.fill_initial()
+	var q := ShapeQueue.new(77)
+	var cur: Array = q.pop()["cells"]
+	var vals: Array = []
+	for i in 150:
+		var mv := Bot.best_move(m, cur)
+		vals.append(float(mv["count"]))
+		var nxt: Array = q.pop()["cells"]
+		m.apply_break(m.compute_break(mv["cell"], cur)["all"], nxt if steer else [])
+		cur = nxt
+	var mean := 0.0
+	for v in vals:
+		mean += v
+	mean /= vals.size()
+	var acc := 0.0
+	for v in vals:
+		acc += (v - mean) * (v - mean)
+	return sqrt(acc / vals.size())
+
+
+func _test_fast_best() -> void:
+	# 빠른 최대 계산(덩어리 번호 방식)이 칸마다 직접 BFS로 센 값과 같아야 한다.
+	var m := BoardModel.new(8, 9, 5, 31)
+	var q := ShapeQueue.new(31)
+	for t in 40:
+		m.fill_initial()
+		var cells: Array = q.pop()["cells"]
+		var slow := 0
+		for y in m.rows:
+			for x in m.cols:
+				slow = maxi(slow, m.compute_break(Vector2i(x, y), cells)["all"].size())
+		if Bot.best_move(m, cells)["count"] != slow:
+			_check(false, "fast best != slow best at trial %d" % t)
+			return
+	_check(true, "fast best matches BFS")

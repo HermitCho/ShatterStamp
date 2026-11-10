@@ -1,7 +1,7 @@
 extends Node2D
 ## 게임 흐름(타이틀 → 플레이 → 결과), 점수/콤보/시간, HUD, 타격감 연출을 담당한다.
 
-enum State { TITLE, PLAY, PAUSED, RESULT }
+enum State { TITLE, TUTORIAL, COUNTDOWN, PLAY, PAUSED, RESULT }
 
 const COLS := 8
 const ROWS := 9
@@ -14,6 +14,8 @@ const SIDE_W := 148.0
 const SAVE_PATH := "user://save.cfg"
 ## 미리 보여 줄 다음 모양 개수
 const NEXT_COUNT := 4
+## 튜토리얼 단계 수(마지막 "준비 완료" 안내는 세지 않음)
+const TUT_TOTAL := 4
 
 var state := State.TITLE
 var rules := GameRules.new()
@@ -28,6 +30,20 @@ var lang := I18n.DEFAULT_LANG
 ## 남은 찍기 금지 시간(연타 방지)
 var stamp_lock := 0.0
 var in_fever := false
+## 연속 PERFECT 횟수(보상 연출이 점점 커진다)
+var perfect_streak := 0
+var tutorial_done := false
+var tut_step := 0
+## 타이틀의 「튜토리얼」 버튼으로 시작했으면 이미 봤어도 튜토리얼을 보여 준다.
+var _force_tutorial := false
+## 튜토리얼에서 지금 찍기를 받는 단계인지(단계가 넘어가는 사이, HOLD 단계에서는 false)
+var _tut_accepting := false
+## 판을 새로 시작할 때마다 늘린다. 기다리던 연출(await)이 이전 판 것이면 무시하려고.
+var _run := 0
+var _fever_t := 0.0
+var _ember_t := 0.0
+## 직전 판정 글자. 새 판정이 뜨면 빨리 지워서 글자끼리 겹치지 않게 한다.
+var _grade_label: Label
 
 var queue: ShapeQueue
 var current: Dictionary = {}
@@ -55,6 +71,8 @@ var next_views: Array = []
 var flash_rect: ColorRect
 var pause_button: Button
 var menus: Menus
+var stage: StageFx
+var tutorial: Tutorial
 
 var _last_tick := -1
 var _autoplay := false
@@ -92,6 +110,19 @@ func _ready() -> void:
 	add_child(music)
 
 	_build_hud()
+	stage = StageFx.new()
+	add_child(stage)
+	stage.count_beat.connect(func(n: int):
+		if n > 0:
+			sfx.play("count", 1.0 + (3 - n) * 0.06)
+		else:
+			sfx.play("go")
+			sfx.play("start", 1.2, -4.0)
+			fx.ring(Vector2(360, StageFx.CENTER_Y), 380.0, Color(StageFx.go_color, 0.85))
+			_flash(0.1))
+	tutorial = Tutorial.new()
+	add_child(tutorial)
+	tutorial.skip_pressed.connect(_finish_tutorial)
 	_build_menus()
 	_apply_settings()
 	_new_board()
@@ -140,6 +171,8 @@ func _new_board() -> void:
 	board.setup(COLS, ROWS, NUM_COLORS, debug_seed)
 	board.broke.connect(_on_broke)
 	board.blocked.connect(_on_blocked)
+	board.stamp_filter = _tut_filter
+	board.rejected.connect(_on_tut_rejected)
 
 
 func _show_title() -> void:
@@ -154,7 +187,11 @@ func _show_title() -> void:
 
 func _start_game() -> void:
 	menus.hide_all()
+	_run += 1
+	stage.clear()
+	tutorial.close()
 	rules.reset()
+	perfect_streak = 0
 	stamp_lock = 0.0
 	now_view.cooldown = 0.0
 	Engine.time_scale = 1.0
@@ -170,11 +207,114 @@ func _start_game() -> void:
 	_refresh_pieces()
 	board.input_enabled = true
 	board.locked = false
-	pause_button.visible = true
-	state = State.PLAY
-	sfx.play("start")
+	pause_button.visible = false
 	music.play_game()
 	_update_hud()
+	var show_tut := (not tutorial_done or _force_tutorial) and not _autoplay
+	_force_tutorial = false
+	if show_tut:
+		_begin_tutorial()
+	else:
+		_begin_countdown()
+
+
+## 3, 2, 1, GO! 동안 보드는 보이고 미리보기도 되지만 찍을 수는 없다. 시간도 흐르지 않는다.
+func _begin_countdown() -> void:
+	state = State.COUNTDOWN
+	board.locked = true
+	var run := _run
+	if not await stage.countdown():
+		return
+	if run != _run or state != State.COUNTDOWN:
+		return
+	state = State.PLAY
+	board.locked = false
+	pause_button.visible = true
+
+
+# ---------------------------------------------------------------- 튜토리얼
+
+func _begin_tutorial() -> void:
+	state = State.TUTORIAL
+	tut_step = 1
+	_show_tut()
+
+
+func _show_tut() -> void:
+	match tut_step:
+		1, 2, 3:
+			_tut_accepting = true
+			tutorial.show_step(tut_step, TUT_TOTAL, "TUT_%d" % tut_step, _best_cells())
+		4:
+			tutorial.show_step(4, TUT_TOTAL, "TUT_4", [], Rect2(hold_view.position, hold_view.size))
+		_:
+			tutorial.show_step(TUT_TOTAL + 1, TUT_TOTAL, "TUT_5", [])
+			var run := _run
+			await get_tree().create_timer(1.8).timeout
+			if run == _run:
+				_finish_tutorial()
+
+
+## 다음 단계 안내를 잠깐 뒤에 띄운다(방금 찍은 연출을 볼 틈).
+func _next_tut(delay: float) -> void:
+	tut_step += 1
+	_tut_accepting = false
+	tutorial.set_cells([])
+	var run := _run
+	await get_tree().create_timer(delay).timeout
+	if run == _run and state == State.TUTORIAL:
+		_show_tut()
+
+
+func _finish_tutorial() -> void:
+	if state != State.TUTORIAL:
+		return
+	tutorial_done = true
+	_save()
+	tutorial.close()
+	# 연습한 점수·콤보는 버리고 깨끗하게 시작한다(보드는 그대로).
+	rules.reset()
+	perfect_streak = 0
+	combo_label.text = ""
+	held = {}
+	hold_used = false
+	_refresh_pieces()
+	_update_hud()
+	_begin_countdown()
+
+
+## 튜토리얼에서는 "가장 많이 부수는 자리"(=PERFECT)만 받는다. 튜토리얼이 아니면 늘 허용.
+## 같은 최대 개수를 내는 자리가 여러 곳이면 어디든 받는다(모두 PERFECT).
+func _tut_filter(cell: Vector2i) -> bool:
+	if state != State.TUTORIAL:
+		return true
+	if not _tut_accepting:
+		return false
+	return board.model.compute_break(cell, current["cells"])["all"].size() >= current_best_n
+
+
+## 최선이 아닌 자리를 찍으려 하면: 낮은 틱 + 안내 상자 흔들림 + "반짝이는 자리에 찍어 보세요!"
+func _on_tut_rejected(cell: Vector2i) -> void:
+	if state != State.TUTORIAL:
+		return
+	sfx.play("tick", 0.6, -6.0)
+	tutorial.nudge()
+	if _tut_accepting:
+		var pos := BOARD_POS + board.cell_center(cell) * BOARD_SCALE
+		pos.x = clampf(pos.x, 210.0, 510.0)  # 긴 문구가 화면 밖으로 나가지 않게
+		_float_text(I18n.t("TUT_WRONG"), pos, Color(1.0, 0.85, 0.3), 30)
+
+
+## 지금 모양을 가장 많이 부수는 자리의 칸들(화면 좌표)
+func _best_cells() -> Array:
+	var mv := Bot.best_move(board.model, current["cells"])
+	var cells: Array = []
+	var cs := Board.CELL * BOARD_SCALE
+	for o in current["cells"]:
+		var p: Vector2i = mv["cell"] + o
+		if board.model.in_bounds(p):
+			cells.append(Rect2(BOARD_POS + Vector2(p) * cs, Vector2(cs, cs)))
+	return cells
 
 
 func _end_game() -> void:
@@ -182,8 +322,13 @@ func _end_game() -> void:
 	board.input_enabled = false
 	board.clear_preview()
 	pause_button.visible = false
-	_break_combo()
+	_break_combo(true)
+	stage.set_danger(0.0)
+	stage.time_up()
+	trauma = minf(1.0, trauma + 0.5)
 	sfx.play("end")
+	sfx.play("big", 0.8)
+	board.create_tween().tween_property(board, "modulate", Color(0.5, 0.5, 0.6), 0.4)
 	music.end_game()
 	var score := rules.score
 	var new_best := score > best and not _autoplay
@@ -191,9 +336,11 @@ func _end_game() -> void:
 		best = score
 		_save()
 	var g: Array = rules.grade_counts
-	await get_tree().create_timer(0.9).timeout
-	if state != State.RESULT:
+	var run := _run
+	await get_tree().create_timer(1.5).timeout
+	if state != State.RESULT or run != _run:
 		return
+	stage.clear()
 	menus.show_result({
 		"score": score, "new_best": new_best, "best": best, "max_combo": rules.max_combo,
 		"grades": g.duplicate(), "time": int(rules.bonus_time_total), "biggest": rules.biggest,
@@ -225,7 +372,10 @@ func _resume() -> void:
 
 
 func _to_title() -> void:
-	_break_combo()
+	_run += 1
+	_break_combo(true)
+	stage.clear()
+	tutorial.close()
 	_set_bg(GameSkin.c("bg"))
 	combo_label.text = ""
 	_new_board()
@@ -236,17 +386,20 @@ func _to_title() -> void:
 
 func _refresh_pieces() -> void:
 	board.set_piece(current["cells"])
-	current_best_n = Bot.best_move(board.model, current["cells"])["count"]
+	board.next_offsets = queue.peek(1)[0]["cells"]
+	current_best_n = board.best_n
 	now_view.set_piece(current["cells"])
 	var nexts := queue.peek(next_views.size())
 	for i in next_views.size():
 		next_views[i].set_piece(nexts[i]["cells"])
 	hold_view.dimmed = hold_used
 	hold_view.set_piece(held.get("cells", []))
+	if state == State.TUTORIAL and tut_step <= 3:
+		tutorial.set_cells(_best_cells())
 
 
 func _do_hold() -> void:
-	if state != State.PLAY or hold_used:
+	if not (state == State.PLAY or state == State.TUTORIAL) or hold_used:
 		return
 	var from_queue := held.is_empty()
 	if from_queue:
@@ -264,6 +417,8 @@ func _do_hold() -> void:
 	else:
 		now_view.slide_in(Vector2(0, -130))  # HOLD(위 칸)에서 꺼낸 모양은 위에서 내려온다
 	hold_view.slide_in(Vector2(0, 130))
+	if state == State.TUTORIAL and tut_step == 4:
+		_next_tut(0.4)
 
 
 ## 큐가 한 칸 당겨질 때: 모든 모양이 아래 칸 자리에서 위로 미끄러져 올라온다.
@@ -285,17 +440,19 @@ func _on_broke(info: Dictionary) -> void:
 	var grade: int = r["grade"]
 	var tier: int = r["tier"]
 	var anchor_pos: Vector2 = info["anchor_pos"]
+	perfect_streak = perfect_streak + 1 if grade == GameRules.Grade.PERFECT else 0
 
 	_juice(info, n, tier, grade)
-	_grade_text(grade, anchor_pos)
-	_float_text("+%d" % r["points"], anchor_pos + Vector2(0, 44), GameSkin.c("tiers")[tier], 34)
-	var dt: float = r["time_delta"]
+	_grade_text(grade, anchor_pos, n, current_best_n, r["points"], GameSkin.c("tiers")[tier])
+	var dt: float = r["time_delta"] if state == State.PLAY else 0.0
+	if state == State.TUTORIAL:
+		rules.time_left = GameRules.GAME_TIME  # 연습 중에는 시간이 늘거나 줄지 않는다
 	if dt > 0.0:
-		_float_text("+%ds" % int(dt), Vector2(560, 120), Color(0.4, 1.0, 0.6), 44)
+		_float_text("+%ds" % int(dt), Vector2(600, 215), Color(0.4, 1.0, 0.6), 44)
 		sfx.play("bonus")
 		_pulse(time_label)
 	elif dt < 0.0:
-		_float_text("-%ds" % int(-dt), Vector2(560, 120), Color(1, 0.35, 0.35), 44)
+		_float_text("-%ds" % int(-dt), Vector2(600, 215), Color(1, 0.35, 0.35), 44)
 	if grade == GameRules.Grade.MISS:
 		_break_combo()
 
@@ -304,10 +461,14 @@ func _on_broke(info: Dictionary) -> void:
 	_refresh_pieces()
 	_slide_queue()
 	_update_hud()
+	if state == State.TUTORIAL and tut_step <= 3:
+		_next_tut(0.55)
 
 
 ## 쿨다운 중에 찍으려 하면 NOW 칸을 살짝 흔들어 "아직"이라고 알려 준다.
 func _on_blocked() -> void:
+	if state == State.COUNTDOWN:
+		return
 	sfx.play("tick", 0.6, -8.0)
 	var t := now_view.create_tween()
 	var x := now_view.position.x
@@ -316,10 +477,66 @@ func _on_blocked() -> void:
 	t.tween_property(now_view, "position:x", x, 0.03)
 
 
-func _grade_text(grade: int, pos: Vector2) -> void:
-	var font_size: int = [58, 50, 42, 44][grade]
-	var text: String = GameRules.GRADE_NAMES[grade] + ("!" if grade == GameRules.Grade.PERFECT else "")
-	_float_text(text, pos - Vector2(0, 10), GameSkin.c("grades")[grade], font_size)
+## 판정 글자. 등급마다 움직임이 다르다: PERFECT는 크게 쾅, GREAT는 튀어나옴, GOOD은 그냥 떠오름, MISS는 흔들리다 떨어짐.
+## 판정 글자 묶음: [판정] / [+점수] / [12개 / 최고 15개(PERFECT 아닐 때)]가 한 덩어리로 같이 움직인다.
+func _grade_text(grade: int, pos: Vector2, n := 0, best_n := 0, points := -1, points_col := Color.WHITE) -> void:
+	var font_size: int = [62, 50, 40, 44][grade]
+	var text: String = GameRules.GRADE_NAMES[grade]
+	if grade == GameRules.Grade.PERFECT:
+		font_size += mini(perfect_streak - 1, 4) * 3
+		text += " x%d!" % perfect_streak if perfect_streak >= 2 else "!"
+	var cx := clampf(pos.x, 230.0, 490.0)
+	var l := _pop_label(text, font_size, Vector2(cx - 260.0, pos.y - 10.0 - font_size * 0.7), 520)
+	l.add_theme_color_override("font_color", GameSkin.c("grades")[grade])
+	l.pivot_offset = l.size / 2.0
+	var line_y := l.size.y - 10.0
+	if points >= 0:
+		var pts := _pop_label("+%d" % points, 34, Vector2(0, line_y), 520)
+		pts.add_theme_color_override("font_color", points_col)
+		l.add_child(pts)
+		line_y += 44.0
+	if grade != GameRules.Grade.PERFECT and best_n > 0:
+		# 기준을 숫자로 보여 준다: "12개 / 최고 15개" → 왜 이 판정인지 바로 안다
+		var sub := _pop_label(I18n.t("GRADE_SUB") % [n, best_n], 26, Vector2(0, line_y), 520)
+		l.add_child(sub)
+	hud.add_child(l)
+	if is_instance_valid(_grade_label):
+		var old := _grade_label
+		var ft := old.create_tween().set_ignore_time_scale()  # 히트스톱 중에도 바로 지운다
+		ft.tween_property(old, "modulate:a", 0.0, 0.08)
+		ft.tween_callback(old.queue_free)
+	_grade_label = l
+	var y := l.position.y
+	var t := l.create_tween()
+	match grade:
+		GameRules.Grade.PERFECT:
+			l.scale = Vector2.ONE * 1.6
+			l.modulate.a = 0.0
+			t.set_parallel()
+			t.tween_property(l, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+			t.tween_property(l, "modulate:a", 1.0, 0.06)
+			t.chain().tween_interval(0.28)
+			t.chain().tween_property(l, "position:y", y - 70.0, 0.45).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			t.tween_property(l, "modulate:a", 0.0, 0.4).set_delay(0.05)
+		GameRules.Grade.GREAT:
+			l.scale = Vector2.ONE * 1.6
+			t.tween_property(l, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+			t.tween_interval(0.12)
+			t.set_parallel()
+			t.chain().tween_property(l, "position:y", y - 80.0, 0.5).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			t.tween_property(l, "modulate:a", 0.0, 0.4).set_delay(0.1)
+		GameRules.Grade.MISS:
+			var x := l.position.x
+			for dx in [12.0, -12.0, 8.0, -8.0, 0.0]:
+				t.tween_property(l, "position:x", x + dx, 0.04)
+			t.set_parallel()
+			t.chain().tween_property(l, "position:y", y + 50.0, 0.45).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+			t.tween_property(l, "modulate:a", 0.0, 0.4)
+		_:
+			t.set_parallel()
+			t.tween_property(l, "position:y", y - 70.0, 0.6).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			t.tween_property(l, "modulate:a", 0.0, 0.4).set_delay(0.25)
+	t.chain().tween_callback(l.queue_free)
 
 
 func _pulse(c: Control) -> void:
@@ -329,13 +546,21 @@ func _pulse(c: Control) -> void:
 	t.tween_property(c, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
-func _break_combo() -> void:
+## quiet: 판이 끝나거나 타이틀로 갈 때처럼 "FEVER END" 연출 없이 조용히 끝낸다.
+func _break_combo(quiet := false) -> void:
 	var t := combo_label.create_tween()
 	t.tween_property(combo_label, "modulate:a", 0.0, 0.25)
 	if in_fever:
 		in_fever = false
 		_set_bg(GameSkin.c("bg"))
 		music.set_fever(false)
+		board.fever = false
+		stage.set_fever_glow(0.0)
+		if not quiet:
+			stage.fever_end()
+			sfx.play("fever_end", 1.0, -3.0)
+		else:
+			stage.hide_fever_badge()
 
 
 # ---------------------------------------------------------------- 타격감
@@ -348,8 +573,12 @@ func _juice(info: Dictionary, n: int, tier: int, grade: int) -> void:
 		amount = maxi(2, amount - 2)
 	for b in broken:
 		var col: Color = GameSkin.block(b["color"])
-		fx.burst(b["pos"], col, amount, power)
-		fx.flash_cell(b["pos"], Block.SIZE * BOARD_SCALE, col)
+		var delay: float = b.get("delay", 0.0)
+		if delay <= 0.0:
+			_burst_cell(b["pos"], col, amount, power)
+		else:
+			# 번지는 파괴에 맞춰 블록마다 차례로 터뜨린다
+			get_tree().create_timer(delay).timeout.connect(_burst_cell.bind(b["pos"], col, amount, power))
 	fx.ring(info["anchor_pos"], 70.0 + n * 6.0 + tier * 40.0, GameSkin.c("ring"))
 
 	if grade == GameRules.Grade.MISS:
@@ -369,7 +598,7 @@ func _juice(info: Dictionary, n: int, tier: int, grade: int) -> void:
 	sfx.play("break", randf_range(0.9, 1.1) * (0.85 if n >= 15 else 1.0))
 	sfx.play("pop", 1.0 + minf(rules.combo - 1, 24) * 0.055, -4.0)
 	if perfect:
-		sfx.play("perfect", 1.0 + minf(rules.combo, 12) * 0.03, -3.0)
+		_perfect_reward(info["anchor_pos"], n, tier)
 	if n >= 15:
 		sfx.play("big")
 	if tier >= 2:
@@ -377,6 +606,26 @@ func _juice(info: Dictionary, n: int, tier: int, grade: int) -> void:
 	if tier >= 3 and not in_fever:
 		_enter_fever()
 	_combo_pop(tier)
+
+
+func _burst_cell(pos: Vector2, col: Color, amount: int, power: float) -> void:
+	fx.burst(pos, col, amount, power)
+	fx.flash_cell(pos, Block.SIZE * BOARD_SCALE, col)
+
+
+## PERFECT 보상: 금빛 별 + 겹 링 + 연속 PERFECT마다 한 음씩 올라가는 차임.
+func _perfect_reward(pos: Vector2, n: int, tier: int) -> void:
+	var gold: Color = GameSkin.c("grades")[GameRules.Grade.PERFECT]
+	var s := mini(perfect_streak, 8)
+	fx.stars(pos, gold, 10 + s * 3, 420.0 + s * 40.0)
+	fx.ring(pos, 110.0 + n * 7.0 + s * 12.0, Color(gold, 0.95))
+	var pitch := pow(2.0, (s - 1) * 2.0 / 12.0)  # 연속할수록 온음씩 올라간다
+	sfx.play("perfect", pitch, -3.0)
+	sfx.play("sparkle", randf_range(0.95, 1.08), -8.0)
+	if s >= 3:
+		sfx.play("perfect", pitch * 1.5, -10.0)  # 5도 화음을 얹어 더 화려하게
+	if tier < 2:
+		_flash(0.06 + s * 0.015)
 
 
 func _combo_pop(tier: int) -> void:
@@ -395,8 +644,17 @@ func _enter_fever() -> void:
 	_set_bg(GameSkin.c("bg_fever"))
 	music.set_fever(true)
 	sfx.play("fever")
-	_flash(0.45)
-	_float_text("FEVER!", Vector2(360, 600), GameSkin.c("tiers")[3], 84)
+	sfx.play("big", 1.2, -2.0)
+	_flash(0.5)
+	trauma = minf(1.0, trauma + 0.35)
+	board.fever = true
+	stage.fever_start()
+	var col: Color = GameSkin.c("tiers")[3]
+	var center := BOARD_POS + board.board_size() * BOARD_SCALE / 2.0
+	fx.ring(center, 520.0, Color(col, 0.9))
+	fx.ring(center, 340.0, Color(1, 1, 1, 0.8))
+	for i in 24:
+		fx.ember(Vector2(randf_range(20.0, 700.0), 1290.0), Color.from_hsv(randf_range(0.8, 1.0), 0.6, 1.0))
 
 
 func _hitstop(duration: float) -> void:
@@ -418,7 +676,7 @@ func _set_bg(c: Color) -> void:
 
 
 func _float_text(text: String, pos: Vector2, color: Color, font_size: int) -> void:
-	var l := _label(text, font_size, pos - Vector2(200, font_size * 0.7), HORIZONTAL_ALIGNMENT_CENTER, 400)
+	var l := _pop_label(text, font_size, pos - Vector2(200, font_size * 0.7), 400)
 	l.add_theme_color_override("font_color", color)
 	hud.add_child(l)
 	var t := l.create_tween().set_parallel()
@@ -437,6 +695,11 @@ func _process(delta: float) -> void:
 	else:
 		world.position = Vector2.ZERO
 
+	if state == State.TUTORIAL and stamp_lock > 0.0:
+		stamp_lock = maxf(0.0, stamp_lock - delta)
+		board.locked = stamp_lock > 0.0
+		now_view.cooldown = stamp_lock / GameRules.STAMP_COOLDOWN
+
 	if state != State.PLAY:
 		return
 
@@ -448,10 +711,9 @@ func _process(delta: float) -> void:
 		board.locked = stamp_lock > 0.0
 		now_view.cooldown = stamp_lock / GameRules.STAMP_COOLDOWN
 
-	var sec := int(ceil(rules.time_left))
-	if rules.time_left <= 10.0 and rules.time_left > 0.0 and sec != _last_tick:
-		_last_tick = sec
-		sfx.play("tick")
+	_time_warning()
+	if in_fever:
+		_fever_frame(delta)
 
 	if _autoplay:
 		_autoplay_timer -= delta
@@ -468,6 +730,35 @@ func _process(delta: float) -> void:
 	_update_hud()
 
 
+## 남은 10초부터 매초 째깍, 5초부터는 더 높고 급한 경고음 + 시간 숫자 튀기 + 화면 가장자리 붉은 빛(매초 뛴다).
+func _time_warning() -> void:
+	var tl := rules.time_left
+	var sec := int(ceil(tl))
+	if tl <= 10.0 and tl > 0.0 and sec != _last_tick:
+		_last_tick = sec
+		if sec <= 5:
+			sfx.play("warn", 1.0 + (5 - sec) * 0.07)
+			_pulse(time_label)
+		else:
+			sfx.play("tick")
+	if tl <= 5.0 and tl > 0.0:
+		var beat := pow(tl - floorf(tl), 4.0)  # 초가 바뀐 직후 가장 밝고 점점 흐려진다
+		var d := (5.0 - tl) / 5.0
+		stage.set_danger((0.25 + 0.75 * beat) * (0.18 + 0.17 * d))
+	else:
+		stage.set_danger(0.0)
+
+
+## 피버 중: 가장자리 분홍 빛이 뛰고, 화면 아래에서 불꽃이 올라온다.
+func _fever_frame(delta: float) -> void:
+	_fever_t += delta
+	stage.set_fever_glow(0.24 + 0.12 * sin(_fever_t * 9.0))
+	_ember_t -= delta
+	while _ember_t <= 0.0:
+		_ember_t += 0.05
+		fx.ember(Vector2(randf_range(10.0, 710.0), 1290.0), Color.from_hsv(randf_range(0.78, 1.0), 0.55, 1.0))
+
+
 ## _unhandled_input이 아니라 _input에서 받는다: 포커스를 가진 버튼 등 GUI가 Space를 먼저 먹지 않게.
 ## physical_keycode로 비교해서 한/영 상태나 자판 배열과 상관없이 같은 자리 키가 동작한다.
 func _input(event: InputEvent) -> void:
@@ -475,7 +766,7 @@ func _input(event: InputEvent) -> void:
 		var k: Key = event.physical_keycode if event.physical_keycode != KEY_NONE else event.keycode
 		match k:
 			KEY_SPACE, KEY_SHIFT, KEY_C:
-				if state == State.PLAY:
+				if state == State.PLAY or state == State.TUTORIAL:
 					_do_hold()
 					get_viewport().set_input_as_handled()
 			KEY_ESCAPE, KEY_P:
@@ -611,6 +902,9 @@ func _build_menus() -> void:
 	menus.sfx = sfx
 	menus.set_settings(volume, music_volume, shake_enabled)
 	menus.start_pressed.connect(_start_game)
+	menus.tutorial_pressed.connect(func():
+		_force_tutorial = true
+		_start_game())
 	menus.restart_pressed.connect(_start_game)
 	menus.resume_pressed.connect(_resume)
 	menus.title_pressed.connect(_to_title)
@@ -659,6 +953,16 @@ func _piece_view(title: String, pos: Vector2, size: Vector2, cell_px: float, hig
 	v.highlight = highlight
 	hud.add_child(v)
 	return v
+
+
+## 보드 위에 잠깐 뜨는 글자: 블록 색에 묻히지 않게 굵고 어두운 테두리를 두른다.
+func _pop_label(text: String, font_size: int, pos: Vector2, width: float) -> Label:
+	var l := _label(text, font_size, pos, HORIZONTAL_ALIGNMENT_CENTER, width)
+	l.add_theme_color_override("font_outline_color", Color(0.02, 0.01, 0.06, 0.96))
+	l.add_theme_constant_override("outline_size", maxi(8, font_size / 4))
+	l.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.6))
+	l.add_theme_constant_override("shadow_offset_y", 3)
+	return l
 
 
 func _label(text: String, font_size: int, pos: Vector2, align := HORIZONTAL_ALIGNMENT_LEFT, width := 300.0) -> Label:
@@ -725,6 +1029,7 @@ func _load_save() -> void:
 		music_volume = float(cfg.get_value("settings", "music", 0.7))
 		shake_enabled = bool(cfg.get_value("settings", "shake", true))
 		lang = str(cfg.get_value("settings", "lang", I18n.DEFAULT_LANG))
+		tutorial_done = bool(cfg.get_value("progress", "tutorial_done", false))
 
 
 func _save() -> void:
@@ -734,4 +1039,5 @@ func _save() -> void:
 	cfg.set_value("settings", "music", music_volume)
 	cfg.set_value("settings", "shake", shake_enabled)
 	cfg.set_value("settings", "lang", lang)
+	cfg.set_value("progress", "tutorial_done", tutorial_done)
 	cfg.save(SAVE_PATH)

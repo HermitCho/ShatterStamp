@@ -8,6 +8,8 @@ extends SceneTree
 ## - decent    : 최대의 75% 이상 되는 자리를 보통 속도로 찍는다
 ## - careful   : 항상 최대 자리를 천천히 찍는다
 ## - expert    : 항상 최대 자리를 빠르게 찍는다 (상한선)
+## - scrub     : 판정 색 미리보기를 보며 마우스로 칸을 무작위로 훑는다(칸당 0.06~0.1초, 반응 0.25초).
+##               PERFECT가 보이면 바로 찍고, 2초가 지나면 그때까지 본 가장 좋은 자리에 찍는다.
 
 const BOTS: Array = [
 	{"name": "spam", "min": 0.15, "max": 0.25, "pick": "random"},
@@ -15,6 +17,7 @@ const BOTS: Array = [
 	{"name": "decent", "min": 0.7, "max": 1.2, "pick": "great"},
 	{"name": "careful", "min": 1.4, "max": 2.2, "pick": "best"},
 	{"name": "expert", "min": 0.6, "max": 1.0, "pick": "best"},
+	{"name": "scrub", "min": 0.06, "max": 0.1, "pick": "scrub"},
 ]
 
 var runs := 40
@@ -73,23 +76,49 @@ func _play(bot: Dictionary, seed_value: int) -> Dictionary:
 		rules.target_growth = growth
 	rules.reset()
 	while true:
-		var wait := maxf(rng.randf_range(bot["min"], bot["max"]), GameRules.STAMP_COOLDOWN)
-		rules.tick(wait)
-		if rules.is_over():
-			break
 		var cells: Array = queue.pop()["cells"]
 		var options := Bot.all_moves(model, cells)
 		var best_n: int = options[0]["count"]
-		var mv: Dictionary = _pick(bot["pick"], options, best_n, rng)
+		var mv: Dictionary
+		var wait: float
+		if bot["pick"] == "scrub":
+			var res := _scrub(options, best_n, bot, rng)
+			mv = res[0]
+			wait = res[1]
+		else:
+			wait = rng.randf_range(bot["min"], bot["max"])
+			mv = _pick(bot["pick"], options, best_n, rng)
+		rules.tick(maxf(wait, GameRules.STAMP_COOLDOWN))
+		if rules.is_over():
+			break
 		var info := model.compute_break(mv["cell"], cells)
 		rules.register_break(info["all"].size(), best_n)
-		model.apply_break(info["all"])
+		model.apply_break(info["all"], queue.peek(1)[0]["cells"])
 		if rules.is_over():
 			break
 	return {
 		"score": rules.score, "length": rules.elapsed, "bonus": rules.bonus_time_total,
 		"max_combo": rules.max_combo, "grades": rules.grade_counts,
 	}
+
+
+## 무작위 순서로 칸을 훑다가 PERFECT를 보면 찍는다. [고른 자리, 걸린 시간]
+func _scrub(options: Array, best_n: int, bot: Dictionary, rng: RandomNumberGenerator) -> Array:
+	var order := options.duplicate()
+	for i in range(order.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var tmp = order[i]
+		order[i] = order[j]
+		order[j] = tmp
+	var t := 0.25
+	var seen: Dictionary = order[0]
+	for o in order:
+		t += rng.randf_range(bot["min"], bot["max"])
+		if o["count"] > seen["count"]:
+			seen = o
+		if o["count"] >= best_n or t >= 2.0:
+			break
+	return [seen, t]
 
 
 func _pick(kind: String, options: Array, best_n: int, rng: RandomNumberGenerator) -> Dictionary:

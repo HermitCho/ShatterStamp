@@ -12,7 +12,7 @@ enum Grade { PERFECT, GREAT, GOOD, MISS }
 
 const GRADE_NAMES: Array = ["PERFECT", "GREAT", "GOOD", "MISS"]
 ## 최대 파괴 수 대비 비율 기준
-const GRADE_RATIO: Array = [1.0, 0.75, 0.5]
+const GRADE_RATIO: Array = [1.0, 0.8, 0.6]
 const GRADE_MULT: Array = [2.0, 1.5, 1.0, 0.5]
 
 const GAME_TIME := 60.0
@@ -27,8 +27,8 @@ const TIER_START: Array = [0, 3, 6, 10]
 const TIER_MULT: Array = [1.0, 1.5, 2.0, 3.0]
 
 ## 시간 보너스 목표 점수 = TARGET_BASE + TARGET_GROWTH * 경과 초
-var target_base := 900.0
-var target_growth := 75.0
+var target_base := 1000.0
+var target_growth := 90.0
 
 var score := 0
 var combo := 0

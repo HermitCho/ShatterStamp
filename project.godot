@@ -27,6 +27,10 @@ window/handheld/orientation=1
 
 enabled=PackedStringArray("res://addons/revvy/plugin.cfg")
 
+[gui]
+
+theme/custom_font="res://assets/fonts/game_font.ttf"
+
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
